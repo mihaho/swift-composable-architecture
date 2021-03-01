@@ -160,9 +160,10 @@ public final class Store<State, Action> {
   ///   - toLocalState: A function that transforms `State` into `LocalState`.
   ///   - fromLocalAction: A function that transforms `LocalAction` into `Action`.
   /// - Returns: A new store with its domain (state and action) transformed.
-  public func scope<LocalState, LocalAction>(
+  internal func scope<LocalState, LocalAction>(
     state toLocalState: @escaping (State) -> LocalState,
-    action fromLocalAction: @escaping (LocalAction) -> Action
+    action fromLocalAction: @escaping (LocalAction) -> Action,
+    isEqual: ((LocalState, LocalState) -> Bool)? = nil
   ) -> Store<LocalState, LocalAction> {
     let localStore = Store<LocalState, LocalAction>(
       initialState: toLocalState(self.state.value),
@@ -173,7 +174,11 @@ public final class Store<State, Action> {
       }
     )
     localStore.parentCancellable = self.state
-      .sink { [weak localStore] newValue in localStore?.state.value = toLocalState(newValue) }
+      .map(toLocalState)
+      .removeDuplicates(by: { lhs, rhs in
+        isEqual?(lhs, rhs) ?? false
+      })
+      .sink { [weak localStore] newValue in localStore?.state.value = newValue }
     return localStore
   }
 
@@ -181,10 +186,11 @@ public final class Store<State, Action> {
   ///
   /// - Parameter toLocalState: A function that transforms `State` into `LocalState`.
   /// - Returns: A new store with its domain (state and action) transformed.
-  public func scope<LocalState>(
-    state toLocalState: @escaping (State) -> LocalState
+  internal func scope<LocalState>(
+    state toLocalState: @escaping (State) -> LocalState,
+    isEqual: ((LocalState, LocalState) -> Bool)? = nil
   ) -> Store<LocalState, Action> {
-    self.scope(state: toLocalState, action: { $0 })
+    self.scope(state: toLocalState, action: { $0 }, isEqual: isEqual)
   }
 
   /// Scopes the store to a publisher of stores of more local state and local actions.
@@ -327,4 +333,36 @@ public struct StorePublisher<State>: Publisher {
   where LocalState: Equatable {
     .init(self.upstream.map(keyPath).removeDuplicates())
   }
+}
+
+public extension Store {
+
+    func scope<LocalState>(
+      state toLocalState: @escaping (State) -> LocalState
+    ) -> Store<LocalState, Action> where LocalState: Equatable {
+        self.scope(
+            state: toLocalState,
+            isEqual: { $0 == $1 }
+        )
+    }
+
+    func scope<LocalState>(
+      state toLocalState: @escaping (State) -> LocalState
+    ) -> Store<LocalState, Action> {
+        self.scope(
+            state: toLocalState,
+            isEqual: { _, _ in false }
+        )
+    }
+
+    func scope<LocalState, LocalAction>(
+      state toLocalState: @escaping (State) -> LocalState,
+      action fromLocalAction: @escaping (LocalAction) -> Action
+    ) -> Store<LocalState, LocalAction> where LocalState: Equatable {
+        self.scope(
+            state: toLocalState,
+            action: fromLocalAction,
+            isEqual: { $0 == $1 }
+        )
+    }
 }
